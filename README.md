@@ -1,8 +1,12 @@
 # contact-mailer-backend
 
-Tiny Express + Nodemailer service that delivers portfolio contact-form submissions
-through Gmail SMTP. **Credentials live only in environment variables** (`.env` locally,
-host env vars in production) — they are never committed and never reach the browser.
+Tiny Express service that delivers portfolio contact-form submissions through the
+**Brevo transactional email API** (HTTPS). Brevo is used instead of Gmail SMTP because
+many hosts (e.g. Render's free tier) block outbound SMTP ports — Brevo's API runs over
+plain HTTPS (port 443), so it works everywhere.
+
+**Credentials live only in environment variables** (`.env` locally, host env vars in
+production) — never committed, never sent to the browser.
 
 This is intentionally a **separate repo** from the portfolio site. The static site
 (GitHub Pages) just `fetch()`es the `/send` endpoint here.
@@ -22,6 +26,15 @@ This is intentionally a **separate repo** from the portfolio site. The static si
 
 `name`, `email`, `message` are required. Replies go to the sender's address via `Reply-To`.
 
+## Brevo setup (one-time)
+
+1. Create a free account at <https://www.brevo.com> (300 emails/day free).
+2. **Verify a sender:** dashboard → *Senders, Domains & Dedicated IPs* → add the
+   address you want mail to come **from** (e.g. your Gmail) and click the confirmation
+   link Brevo emails you. This becomes `MAIL_FROM_EMAIL`.
+3. **Create an API key:** dashboard → *SMTP & API → API Keys* → generate. This is
+   `BREVO_API_KEY` (starts with `xkeysib-`).
+
 ## Run locally
 
 ```bash
@@ -40,18 +53,17 @@ curl -X POST http://localhost:3000/send \
 
 ## Environment variables
 
-| Var               | Meaning                                                                 |
-|-------------------|-------------------------------------------------------------------------|
-| `EMAIL_USER`      | Gmail account used for SMTP auth (the sender).                          |
-| `EMAIL_PASS`      | Gmail **App Password** (not your normal password). Spaces are stripped. |
-| `MAIL_TO`         | Inbox that receives submissions.                                        |
-| `ALLOWED_ORIGINS` | Comma-separated sites allowed to call the API (CORS). No trailing slash.|
-| `PORT`            | Local port. Managed hosts set this automatically.                       |
+| Var               | Meaning                                                                  |
+|-------------------|--------------------------------------------------------------------------|
+| `BREVO_API_KEY`   | Brevo API key (`xkeysib-...`).                                            |
+| `MAIL_TO`         | Inbox that receives submissions.                                         |
+| `MAIL_TO_NAME`    | Optional display name for the recipient.                                 |
+| `MAIL_FROM_EMAIL` | Sender address — **must be a verified sender/domain in Brevo**.          |
+| `MAIL_FROM_NAME`  | Sender display name (default `Portfolio Contact`).                       |
+| `ALLOWED_ORIGINS` | Comma-separated sites allowed to call the API (CORS). No trailing slash. |
+| `PORT`            | Local port. Managed hosts set this automatically.                        |
 
-Generate an App Password: enable 2-Step Verification, then
-<https://myaccount.google.com/apppasswords>.
-
-## Deploy (Render — free tier)
+## Deploy (Render — free tier works now)
 
 1. Push this repo to GitHub.
 2. Render → **New → Web Service** → connect the repo.
@@ -61,13 +73,11 @@ Generate an App Password: enable 2-Step Verification, then
 6. In the portfolio's `assets/js/index-new.js`, set `MAILER_ENDPOINT` to
    `https://<your-service>.onrender.com/send`.
 
-Railway/Fly.io/any Node host work the same way: set the env vars in the dashboard.
-
 > Free Render instances sleep when idle, so the first request after a quiet period
 > can take a few seconds to wake.
 
 ## Security notes
 
 - `.env` is gitignored. Keep secrets out of git.
-- Rotate the App Password if it is ever pasted into a chat, screenshot, or commit.
+- Rotate the API key if it is ever pasted into a chat, screenshot, or commit.
 - CORS + a honeypot field + rate limiting (20 sends / IP / 15 min) are built in.

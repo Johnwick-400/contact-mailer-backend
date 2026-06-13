@@ -2,24 +2,25 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
 
 const {
-  EMAIL_USER,
-  EMAIL_PASS,
+  BREVO_API_KEY,
   MAIL_TO,
+  MAIL_TO_NAME = '',
+  MAIL_FROM_EMAIL,
+  MAIL_FROM_NAME = 'Portfolio Contact',
   ALLOWED_ORIGINS = '',
   PORT = 3000,
 } = process.env;
 
-if (!EMAIL_USER || !EMAIL_PASS) {
-  console.error('Missing EMAIL_USER / EMAIL_PASS. Set them in .env (local) or your host\'s env vars.');
+if (!BREVO_API_KEY || !MAIL_TO || !MAIL_FROM_EMAIL) {
+  console.error('Missing BREVO_API_KEY / MAIL_TO / MAIL_FROM_EMAIL. Set them in .env (local) or your host\'s env vars.');
   process.exit(1);
 }
 
 const app = express();
-app.set('trust proxy', 1); // needed for correct client IPs behind Render/Railway proxies
+app.set('trust proxy', 1); // correct client IPs behind Render's proxy
 app.use(express.json({ limit: '10kb' }));
 
 // Only let the browsers we trust call this API.
@@ -44,15 +45,42 @@ const sendLimiter = rateLimit({
   message: { ok: false, error: 'Too many messages. Please try again later.' },
 });
 
-// Gmail app passwords are shown as four space-separated groups; the spaces are cosmetic.
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: { user: EMAIL_USER, pass: EMAIL_PASS.replace(/\s+/g, '') },
-});
-
 const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 const esc = (v = '') =>
   String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// Send through Brevo's transactional email API (HTTPS / port 443) — works on
+// hosts like Render free that block outbound SMTP.
+async function sendEmail({ replyToEmail, replyToName, subject, text, html }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': BREVO_API_KEY,
+        'Content-Type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: MAIL_FROM_NAME, email: MAIL_FROM_EMAIL },
+        to: [{ email: MAIL_TO, name: MAIL_TO_NAME || undefined }],
+        replyTo: { email: replyToEmail, name: replyToName },
+        subject,
+        htmlContent: html,
+        textContent: text,
+      }),
+      signal: controller.signal,
+    });
+    if (!r.ok) {
+      const detail = await r.text().catch(() => '');
+      throw new Error(`Brevo responded ${r.status}: ${detail}`);
+    }
+    return r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 app.get('/', (_req, res) => res.json({ ok: true, service: 'contact-mailer' }));
 
@@ -70,10 +98,9 @@ app.post('/send', sendLimiter, async (req, res) => {
   }
 
   try {
-    await transporter.sendMail({
-      from: `"Portfolio Contact" <${EMAIL_USER}>`,
-      to: MAIL_TO || EMAIL_USER,
-      replyTo: `"${name}" <${email}>`,
+    await sendEmail({
+      replyToEmail: email,
+      replyToName: name,
       subject: `New portfolio message from ${name}`,
       text:
         `Name: ${name}\n` +
@@ -95,7 +122,7 @@ app.post('/send', sendLimiter, async (req, res) => {
     });
     return res.json({ ok: true });
   } catch (err) {
-    console.error('sendMail failed:', err.message);
+    console.error('send failed:', err.message);
     return res.status(500).json({ ok: false, error: 'Could not send right now. Please try again later.' });
   }
 });
